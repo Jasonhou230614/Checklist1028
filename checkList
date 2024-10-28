@@ -1,0 +1,334 @@
+<!DOCTYPE html> 
+
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Check List with Signature</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+        }
+        .container {
+            max-width: 600px;
+            margin: auto;
+            padding: 20px;
+            border: 1px solid #ccc;
+            border-radius: 10px;
+        }
+        .hidden {
+            display: none;
+        }
+        label, input[type="text"], textarea, button {
+            width: 100%;
+            padding: 10px;
+            margin: 5px 0;
+        }
+        .history {
+            margin-top: 20px;
+            border-top: 1px solid #ccc;
+            padding-top: 10px;
+        }
+        .history-item {
+            display: flex;
+            justify-content: space-between;
+            margin: 5px 0;
+        }
+        .signature-pad {
+            border: 1px solid #000;
+            cursor: crosshair;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>Check List</h2>
+    <div id="serialInputSection">
+        <label for="serialNumber">請輸入或掃描序號：</label>
+        <input type="text" id="serialNumber" placeholder="請輸入14位序號">
+        <button onclick="validateSerial()">提交</button>
+        <p id="errorMessage" style="color:red;"></p>
+    </div>
+
+    <div id="checklistForm" class="hidden">
+        <h3>維修點檢表 2.1</h3>
+        <label>序號 (已自動填入):</label>
+        <input type="text" id="autoSerial" readonly>
+
+        <label for="model">機型：</label>
+        <input type="text" id="model" placeholder="請輸入機種名稱">
+
+        <h4>點檢項目</h4>
+        <label><input type="checkbox" id="screwTight"> 螺絲是否鎖緊</label>
+        <label><input type="checkbox" id="cableInserted"> 線材是否確實插入</label>
+        <label><input type="checkbox" id="glueApplied"> 點膠是否確實</label>
+
+        <h4>外觀檢查</h4>
+        <label><input type="checkbox" id="frontPanel"> 前面板</label>
+        <label><input type="checkbox" id="backPanel"> 後背板</label>
+        <label><input type="checkbox" id="upperCover"> 上蓋</label>
+        <label><input type="checkbox" id="lowerCover"> 下蓋</label>
+
+        <h4>其他備註</h4>
+        <textarea id="otherComments" placeholder="填寫其他重點檢查"></textarea>
+
+        <button onclick="openSignaturePad()">確認完成並簽名</button>
+    </div>
+
+    <div id="signatureModal" class="hidden">
+        <h3>簽名</h3>
+        <canvas id="signaturePad" class="signature-pad" width="500" height="200"></canvas>
+        <button onclick="clearSignature()">清除簽名</button>
+        <button onclick="saveSignature()">儲存簽名</button>
+    </div>
+
+    <div id="historyData" class="history">
+        <h3>歷史資料</h3>
+        <div id="historyList"></div>
+    </div>
+</div>
+
+<script>
+    // Initialize history data from IndexedDB
+    let historyData = {};
+    const DB_NAME = 'checklistDB';
+    const STORE_NAME = 'checklistStore';
+    
+    // Initialize IndexedDB
+    function initDB() {
+        return new Promise((resolve, reject) => {
+            const request = indexedDB.open(DB_NAME, 1);
+            
+            request.onerror = () => reject(request.error);
+            request.onsuccess = () => resolve(request.result);
+            
+            request.onupgradeneeded = (event) => {
+                const db = event.target.result;
+                if (!db.objectStoreNames.contains(STORE_NAME)) {
+                    db.createObjectStore(STORE_NAME);
+                }
+            };
+        });
+    }
+
+    // Load data from IndexedDB
+    async function loadHistoryData() {
+        try {
+            const db = await initDB();
+            const transaction = db.transaction(STORE_NAME, 'readonly');
+            const store = transaction.objectStore(STORE_NAME);
+            const request = store.getAll();
+            
+            return new Promise((resolve, reject) => {
+                request.onsuccess = () => {
+                    const data = {};
+                    request.result.forEach(item => {
+                        // Filter out test data (0, 1, 2, 3)
+                        if (!/^[0-3]$/.test(item.serial)) {
+                            data[item.serial] = item;
+                        }
+                    });
+                    resolve(data);
+                };
+                request.onerror = () => reject(request.error);
+            });
+        } catch (error) {
+            console.error('Error loading data:', error);
+            return {};
+        }
+    }
+
+    // Save data to IndexedDB
+    async function saveToIndexedDB(serial, data) {
+        try {
+            const db = await initDB();
+            const transaction = db.transaction(STORE_NAME, 'readwrite');
+            const store = transaction.objectStore(STORE_NAME);
+            store.put(data, serial);
+        } catch (error) {
+            console.error('Error saving data:', error);
+        }
+    }
+
+    // Delete data from IndexedDB
+    async function deleteFromIndexedDB(serial) {
+        try {
+            const db = await initDB();
+            const transaction = db.transaction(STORE_NAME, 'readwrite');
+            const store = transaction.objectStore(STORE_NAME);
+            store.delete(serial);
+        } catch (error) {
+            console.error('Error deleting data:', error);
+        }
+    }
+
+    // Load initial data
+    window.onload = async () => {
+        historyData = await loadHistoryData();
+        updateHistory();
+    };
+
+    function validateSerial() {
+        const serialInput = document.getElementById("serialNumber").value;
+        const errorMessage = document.getElementById("errorMessage");
+
+        if (serialInput.length !== 14 || isNaN(serialInput)) {
+            errorMessage.innerText = "序號 FAIL：必須為 14 位數字。";
+        } else {
+            errorMessage.innerText = "序號 PASS";
+            document.getElementById("checklistForm").classList.remove("hidden");
+            document.getElementById("serialInputSection").classList.add("hidden");
+            document.getElementById("autoSerial").value = serialInput;
+        }
+    }
+
+    function openSignaturePad() {
+        document.getElementById("signatureModal").classList.remove("hidden");
+        initSignaturePad();
+    }
+
+    function initSignaturePad() {
+        const canvas = document.getElementById("signaturePad");
+        const ctx = canvas.getContext("2d");
+        let drawing = false;
+
+        canvas.onmousedown = () => { drawing = true; };
+        canvas.onmouseup = () => { drawing = false; ctx.beginPath(); };
+        canvas.onmousemove = (e) => {
+            if (!drawing) return;
+            ctx.lineWidth = 2;
+            ctx.lineCap = "round";
+            ctx.strokeStyle = "black";
+            ctx.lineTo(e.offsetX, e.offsetY);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(e.offsetX, e.offsetY);
+        };
+    }
+
+    function clearSignature() {
+        const canvas = document.getElementById("signaturePad");
+        const ctx = canvas.getContext("2d");
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+
+    function saveSignature() {
+        const canvas = document.getElementById("signaturePad");
+        const signatureDataUrl = canvas.toDataURL();
+
+        submitChecklist(signatureDataUrl);
+        document.getElementById("signatureModal").classList.add("hidden");
+    }
+
+    async function submitChecklist(signature) {
+        const serial = document.getElementById("autoSerial").value;
+        const model = document.getElementById("model").value;
+
+        const checklistData = {
+            serial: serial,
+            model: model,
+            screwTight: document.getElementById("screwTight").checked,
+            cableInserted: document.getElementById("cableInserted").checked,
+            glueApplied: document.getElementById("glueApplied").checked,
+            frontPanel: document.getElementById("frontPanel").checked,
+            backPanel: document.getElementById("backPanel").checked,
+            upperCover: document.getElementById("upperCover").checked,
+            lowerCover: document.getElementById("lowerCover").checked,
+            otherComments: document.getElementById("otherComments").value,
+            signature: signature,
+            timestamp: new Date().toISOString()
+        };
+
+        historyData[serial] = checklistData;
+        await saveToIndexedDB(serial, checklistData);
+        alert("點檢表已提交！");
+        resetForm();
+        updateHistory();
+    }
+
+    function resetForm() {
+        document.getElementById("checklistForm").classList.add("hidden");
+        document.getElementById("serialInputSection").classList.remove("hidden");
+        document.getElementById("serialNumber").value = '';
+        document.getElementById("errorMessage").innerText = '';
+
+        document.getElementById("model").value = '';
+        document.getElementById("screwTight").checked = false;
+        document.getElementById("cableInserted").checked = false;
+        document.getElementById("glueApplied").checked = false;
+        document.getElementById("frontPanel").checked = false;
+        document.getElementById("backPanel").checked = false;
+        document.getElementById("upperCover").checked = false;
+        document.getElementById("lowerCover").checked = false;
+        document.getElementById("otherComments").value = '';
+    }
+
+    function updateHistory() {
+        const historyList = document.getElementById("historyList");
+        historyList.innerHTML = '';
+
+        // Sort entries by timestamp (newest first)
+        const sortedEntries = Object.entries(historyData).sort((a, b) => {
+            return new Date(b[1].timestamp) - new Date(a[1].timestamp);
+        });
+
+        for (const [serial, data] of sortedEntries) {
+            const itemDiv = document.createElement("div");
+            itemDiv.classList.add("history-item");
+
+            const itemLink = document.createElement("a");
+            itemLink.innerText = `${serial} (${data.model})`;
+            itemLink.href = "#";
+            itemLink.onclick = () => displayChecklist(serial);
+
+            const deleteButton = document.createElement("button");
+            deleteButton.innerText = "刪除";
+            deleteButton.onclick = () => deleteChecklist(serial);
+
+            itemDiv.appendChild(itemLink);
+            itemDiv.appendChild(deleteButton);
+            historyList.appendChild(itemDiv);
+        }
+    }
+
+    function displayChecklist(serial) {
+        const data = historyData[serial];
+        const img = data.signature ? `<img src="${data.signature}" alt="Signature" width="300">` : "無簽名";
+        const date = new Date(data.timestamp).toLocaleString();
+        
+        // 使用 innerHTML 顯示包含圖片的訊息
+        const checklistDetails = `
+            <div>
+                <strong>檢查日期:</strong> ${date}<br>
+                <strong>機型:</strong> ${data.model}<br>
+                <strong>螺絲是否鎖緊:</strong> ${data.screwTight ? '是' : '否'}<br>
+                <strong>線材是否確實插入:</strong> ${data.cableInserted ? '是' : '否'}<br>
+                <strong>點膠是否確實:</strong> ${data.glueApplied ? '是' : '否'}<br>
+                <strong>前面板:</strong> ${data.frontPanel ? '通過' : '未通過'}<br>
+                <strong>後背板:</strong> ${data.backPanel ? '通過' : '未通過'}<br>
+                <strong>上蓋:</strong> ${data.upperCover ? '通過' : '未通過'}<br>
+                <strong>下蓋:</strong> ${data.lowerCover ? '通過' : '未通過'}<br>
+                <strong>其他備註:</strong> ${data.otherComments}<br>
+                <strong>簽名:</strong> ${img}
+            </div>
+        `;
+        
+        // 使用一個簡單的對話框顯示詳情
+        const detailsWindow = window.open("", "Checklist Details", "width=400,height=600");
+        detailsWindow.document.write(checklistDetails);
+        detailsWindow.document.close();
+    }
+
+    async function deleteChecklist(serial) {
+        if (confirm('確定要刪除這筆紀錄嗎？')) {
+            delete historyData[serial];
+            await deleteFromIndexedDB(serial);
+            updateHistory();
+        }
+    }
+</script>
+
+</body>
+</html>
